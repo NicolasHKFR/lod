@@ -26,7 +26,7 @@ python --version >nul 2>&1
 if %errorlevel% NEQ 0 (
     echo [!] Python is NOT installed.
     echo.
-    echo     Download Python 3.10+ from: https://www.python.org/downloads/
+    echo     Download Python 3.14+ from: https://www.python.org/downloads/
     echo     During install, check "Add Python to PATH".
     echo.
     pause
@@ -36,15 +36,15 @@ for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PYVER=%%v
 echo     Found Python !PYVER!
 echo.
 
-rem ---- Check Python version >= 3.10 ----
+rem ---- Check Python version >= 3.14 ----
 for /f "tokens=1,2 delims=." %%a in ("!PYVER!") do (
     if %%a LSS 3 (
-        echo [!] Python 3.10+ required, found !PYVER!
+        echo [!] Python 3.14+ required, found !PYVER!
         pause
         exit /b 1
     )
-    if %%a EQU 3 if %%b LSS 10 (
-        echo [!] Python 3.10+ required, found !PYVER!
+    if %%a EQU 3 if %%b LSS 14 (
+        echo [!] Python 3.14+ required, found !PYVER!
         pause
         exit /b 1
     )

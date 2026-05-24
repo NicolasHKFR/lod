@@ -1,10 +1,10 @@
 import json
 import os
-import logging
 import csv
 import io
 import tempfile
 import asyncio
+import contextvars
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -16,23 +16,30 @@ from backend.config import ROOT_DIR, UPLOAD_DIR, MAX_FILE_SIZE, load_endpoints, 
 from backend.ingestion.extractor import extract_text
 from backend.engine.ollama_client import call_llm as call_ollama, _truncate
 from backend.database import crud
+from backend.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = APIRouter()
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-async def _extract_file(file: UploadFile) -> str:
+async def _read_upload(file: UploadFile) -> tuple[str, bytes]:
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(400, f"File '{file.filename}' exceeds max size")
-    ext = Path(file.filename).suffix.lower()
+    logger.debug("Read upload %s (%d bytes)", file.filename, len(content))
+    return (file.filename or "unknown", content)
+
+
+def _extract_bytes(filename: str, content: bytes) -> str:
+    ext = Path(filename).suffix.lower()
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
     try:
         tmp.write(content)
         tmp.close()
         text = extract_text(tmp.name)
+        logger.debug("Extracted %s -> %d chars", filename, len(text))
         return text or ""
     finally:
         os.unlink(tmp.name)
@@ -87,7 +94,8 @@ async def analyze(
 ):
     control = control_text
     if control_file and control_file.filename:
-        text = await _extract_file(control_file)
+        fn, content = await _read_upload(control_file)
+        text = _extract_bytes(fn, content)
         if text:
             control = text
 
@@ -97,20 +105,31 @@ async def analyze(
     selected_endpoint = endpoint_url.strip() or load_endpoints()[0]
     selected_model = model_name.strip() or None
     evidence_parts = []
+    evidence_data = []
+    for f in evidence_files:
+        if f.filename:
+            try:
+                fn, content = await _read_upload(f)
+                evidence_data.append((fn, content))
+            except Exception as e:
+                logger.warning(f"Failed to read {f.filename}: {e}")
+                evidence_parts.append(f"--- {f.filename} ---\n[Could not extract text]")
+
+    for fn, content in evidence_data:
+        try:
+            text = _extract_bytes(fn, content)
+        except Exception as e:
+            logger.warning(f"Failed to extract {fn}: {e}")
+            evidence_parts.append(f"--- {fn} ---\n[Could not extract text]")
+            continue
+        if text:
+            evidence_parts.append(f"--- {fn} ---\n{text}")
+        else:
+            evidence_parts.append(f"--- {fn} ---\n[Empty content]")
 
     loop = asyncio.get_event_loop()
-    tasks = [_extract_file(f) for f in evidence_files if f.filename]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for f, res in zip([f for f in evidence_files if f.filename], results):
-        if isinstance(res, Exception):
-            logger.warning(f"Failed to extract {f.filename}: {res}")
-            evidence_parts.append(f"--- {f.filename} ---\n[Could not extract text]")
-        elif res:
-            evidence_parts.append(f"--- {f.filename} ---\n{res}")
-        else:
-            evidence_parts.append(f"--- {f.filename} ---\n[Empty content]")
-
-    result = await loop.run_in_executor(None, _process_control, control, evidence_parts, selected_endpoint, selected_model)
+    ctx = contextvars.copy_context()
+    result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, control, evidence_parts, selected_endpoint, selected_model))
     return result
 
 
@@ -122,13 +141,25 @@ async def analyze_stream(
     endpoint_url: str = Form(""),
     model_name: str = Form(""),
 ):
+    evidence_data = []
+    for f in evidence_files:
+        if f.filename:
+            try:
+                fn, content = await _read_upload(f)
+                evidence_data.append((fn, content))
+            except Exception as e:
+                logger.warning(f"Failed to read {f.filename}: {e}")
+
+    control_override = None
+    if control_file and control_file.filename:
+        fn, content = await _read_upload(control_file)
+        control_override = _extract_bytes(fn, content) or None
+
     async def event_stream():
-        control = control_text
+        control = control_override if control_override is not None else control_text
+
         if control_file and control_file.filename:
             yield f"data: {json.dumps({'step': 'extracting', 'message': f'Reading control file: {control_file.filename}'})}\n\n"
-            text = await _extract_file(control_file)
-            if text:
-                control = text
 
         if not control or not control.strip():
             yield f"data: {json.dumps({'step': 'error', 'message': 'Control description is required'})}\n\n"
@@ -137,31 +168,32 @@ async def analyze_stream(
         selected_endpoint = endpoint_url.strip() or load_endpoints()[0]
         selected_model = model_name.strip() or None
         evidence_parts = []
-        valid_files = [f for f in evidence_files if f.filename]
-        total = len(valid_files)
+        total = len(evidence_data)
 
         loop = asyncio.get_event_loop()
 
         if total:
             yield f"data: {json.dumps({'step': 'extracting', 'message': f'Extracting {total} file(s)...'})}\n\n"
-            tasks = [_extract_file(f) for f in valid_files]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for f, res in zip(valid_files, results):
-                if isinstance(res, Exception):
-                    logger.warning(f"Failed to extract {f.filename}: {res}")
-                    evidence_parts.append(f"--- {f.filename} ---\n[Could not extract text]")
-                elif res:
-                    evidence_parts.append(f"--- {f.filename} ---\n{res}")
+            for fn, content in evidence_data:
+                try:
+                    text = _extract_bytes(fn, content)
+                except Exception as e:
+                    logger.warning(f"Failed to extract {fn}: {e}")
+                    evidence_parts.append(f"--- {fn} ---\n[Could not extract text]")
+                    continue
+                if text:
+                    evidence_parts.append(f"--- {fn} ---\n{text}")
                 else:
-                    evidence_parts.append(f"--- {f.filename} ---\n[Empty content]")
+                    evidence_parts.append(f"--- {fn} ---\n[Empty content]")
 
         yield f"data: {json.dumps({'step': 'analyzing', 'message': 'Sending to LLM...'})}\n\n"
 
         try:
-            result = await loop.run_in_executor(None, _process_control, control, evidence_parts, selected_endpoint, selected_model)
+            ctx = contextvars.copy_context()
+            result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, control, evidence_parts, selected_endpoint, selected_model))
             yield f"data: {json.dumps({'step': 'result', 'data': result})}\n\n"
         except Exception as e:
-            logger.error(f"LLM call failed: {e}")
+            logger.error(f"LLM call failed: {e}", exc_info=True)
             yield f"data: {json.dumps({'step': 'error', 'message': f'LLM service error: {e}'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -176,9 +208,30 @@ async def analyze_batch(
     model_name: str = Form(""),
     sse: str = Form("true"),
 ):
+    evidence_parts = []
+    evidence_data = []
+    for f in evidence_files:
+        if f.filename:
+            try:
+                fn, content = await _read_upload(f)
+                evidence_data.append((fn, content))
+            except Exception as e:
+                logger.warning(f"Failed to read {f.filename}: {e}")
+                evidence_parts.append(f"--- {f.filename} ---\n[Could not extract text]")
+
+    for fn, content in evidence_data:
+        try:
+            text = _extract_bytes(fn, content)
+        except Exception as e:
+            logger.warning(f"Failed to extract {fn}: {e}")
+            evidence_parts.append(f"--- {fn} ---\n[Could not extract text]")
+            continue
+        if text:
+            evidence_parts.append(f"--- {fn} ---\n{text}")
+
     if controls_file and controls_file.filename:
-        text = await _extract_file(controls_file)
-        controls_text = text or ""
+        fn, content = await _read_upload(controls_file)
+        controls_text = _extract_bytes(fn, content) or ""
 
     if not controls_text or not controls_text.strip():
         raise HTTPException(400, "Controls text is required for batch mode")
@@ -189,16 +242,8 @@ async def analyze_batch(
 
     selected_endpoint = endpoint_url.strip() or load_endpoints()[0]
     selected_model = model_name.strip() or None
-    evidence_parts = []
 
     loop = asyncio.get_event_loop()
-    tasks = [_extract_file(f) for f in evidence_files if f.filename]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for f, res in zip([f for f in evidence_files if f.filename], results):
-        if isinstance(res, Exception):
-            evidence_parts.append(f"--- {f.filename} ---\n[Could not extract text]")
-        elif res:
-            evidence_parts.append(f"--- {f.filename} ---\n{res}")
 
     async def batch_stream():
         outcomes = []
@@ -208,7 +253,8 @@ async def analyze_batch(
             preview = block[:80].replace("\n", " ")
             yield f"data: {json.dumps({'step': 'progress', 'message': f'Processing control {idx + 1} of {total}: {preview}', 'percent': pct})}\n\n"
             try:
-                result = await loop.run_in_executor(None, _process_control, block, evidence_parts, selected_endpoint, selected_model)
+                ctx = contextvars.copy_context()
+                result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, block, evidence_parts, selected_endpoint, selected_model))
                 result["control_preview"] = block[:100]
                 outcomes.append(result)
             except Exception as e:
@@ -248,9 +294,10 @@ async def health():
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        urllib.request.urlopen(req, timeout=5)
+        urllib.request.urlopen(req, timeout=2)
         llm_ok = True
     except Exception:
+        logger.debug("Health check: Ollama probe failed", exc_info=True)
         llm_ok = False
     db_ok = False
     try:
@@ -470,7 +517,7 @@ async def chat(prompt: str = Form(...), model: str = Form(""), system: str = For
             text = body
         return {"response": text.strip(), "model": selected_model}
     except Exception as e:
-        logger.error(f"Chat LLM call failed: {e}")
+        logger.error(f"Chat LLM call failed: {e}", exc_info=True)
         raise HTTPException(502, f"Chat LLM call failed: {e}")
 
 
@@ -545,6 +592,35 @@ async def get_logs(limit: int = Query(100), offset: int = Query(0)):
                 })
     items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return {"logs": items}
+
+
+@router.get("/logs/recent")
+async def get_recent_logs(
+    lines: int = Query(200, ge=10, le=5000),
+    level: str = Query("", pattern="^(|DEBUG|INFO|WARNING|ERROR|CRITICAL)$"),
+    search: str = Query(""),
+    correlation_id: str = Query(""),
+):
+    log_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "app.log")
+    if not os.path.isfile(log_file):
+        return {"entries": []}
+
+    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+        all_lines = f.readlines()
+
+    total = len(all_lines)
+    tail = all_lines[-lines:] if lines < total else all_lines
+
+    if level:
+        padded = f" [{level:<7}] "
+        tail = [ln for ln in tail if padded in ln]
+    if search:
+        tail = [ln for ln in tail if search.lower() in ln.lower()]
+    if correlation_id:
+        needle = f"[{correlation_id}]"
+        tail = [ln for ln in tail if needle in ln]
+
+    return {"entries": tail, "total_lines": total, "returned": len(tail)}
 
 
 @router.get("/config")

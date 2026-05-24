@@ -229,12 +229,42 @@
       <!-- ===== LOGS PAGE ===== -->
       <section class="page" id="page-logs">
         <div class="page-header">
-          <h2>Audit Logs</h2>
-          <p>Full audit trail of submissions and overrides</p>
+          <h2>Logs</h2>
+          <p>Audit trail and system diagnostics</p>
         </div>
-        <div class="card">
-          <div id="logs-container">
-            <p style="color:#888;font-size:13px;">Loading logs...</p>
+
+        <div class="tab-bar tabs-2">
+          <button class="tab-btn active" data-tab="audit">Audit Trail</button>
+          <button class="tab-btn" data-tab="system">System Logs</button>
+        </div>
+
+        <div class="tab-content tab-audit active">
+          <div class="card">
+            <div id="logs-container">
+              <p style="color:#888;font-size:13px;">Loading logs...</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-content tab-system">
+          <div class="card">
+            <div class="syslog-toolbar">
+              <div class="syslog-levels">
+                <button class="syslog-filter active" data-level="">All</button>
+                <button class="syslog-filter" data-level="ERROR">ERROR</button>
+                <button class="syslog-filter" data-level="WARNING">WARN</button>
+                <button class="syslog-filter" data-level="INFO">INFO</button>
+                <button class="syslog-filter" data-level="DEBUG">DEBUG</button>
+              </div>
+              <input class="syslog-search" id="syslog-search" type="text" placeholder="Search logs..." />
+              <label class="syslog-autorefresh">
+                <input type="checkbox" id="syslog-refresh-toggle" checked /> Auto-refresh
+              </label>
+            </div>
+            <div class="syslog-stats" id="syslog-stats"></div>
+            <div class="syslog-container" id="syslog-container">
+              <p style="color:#888;font-size:13px;">Loading system logs...</p>
+            </div>
           </div>
         </div>
       </section>

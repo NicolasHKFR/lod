@@ -8,7 +8,7 @@ Automates the validation of Line of Defense 1 (LOD1) Technology Risk Management 
 
 ### Prerequisites
 
-- **Python 3.10+** — [python.org](https://python.org)
+- **Python 3.14+** — [python.org](https://python.org)
 - **Ollama** — [ollama.com](https://ollama.com) with a model pulled (e.g. `ollama pull llama3:8b`)
 
 ### Option A: Windows Installer (Recommended)

@@ -551,3 +551,52 @@ html.dark .help-page a { color: #7b9cff; }
 /* ===== SIDEBAR LINK ===== */
 .sidebar-link { display: flex; align-items: center; gap: 8px; padding: 10px 16px; font-size: 13px; color: #a0aec0; transition: all 0.15s; }
 .sidebar-link:hover { background: rgba(67, 97, 238, 0.1); color: #e2e8f0; }
+
+/* ===== TAB BAR ===== */
+.tab-bar { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.tab-bar .tab-btn {
+  padding: 8px 20px; font-size: 13px; font-weight: 500; border: none; background: none;
+  color: #888; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s;
+}
+.tab-bar .tab-btn:hover { color: #4361ee; }
+.tab-bar .tab-btn.active { color: #4361ee; border-bottom-color: #4361ee; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ===== SYSTEM LOG VIEWER ===== */
+.syslog-toolbar {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
+}
+.syslog-levels { display: flex; gap: 4px; }
+.syslog-filter {
+  padding: 4px 12px; font-size: 11px; font-weight: 600; border: 1px solid #ddd;
+  border-radius: 4px; background: #f5f5f5; cursor: pointer; transition: all 0.15s;
+}
+.syslog-filter:hover { background: #e8e8e8; }
+.syslog-filter.active { background: #4361ee; color: #fff; border-color: #4361ee; }
+.syslog-search {
+  flex: 1; min-width: 120px; padding: 5px 10px; font-size: 12px;
+  border: 1px solid #ddd; border-radius: 4px;
+}
+.syslog-autorefresh { font-size: 12px; color: #666; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.syslog-autorefresh input { margin: 0; }
+.syslog-stats { font-size: 11px; color: #888; margin-bottom: 6px; }
+.syslog-container {
+  background: #1a1d2e; color: #e2e8f0; font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-size: 11px; line-height: 1.5; padding: 12px; border-radius: 6px; max-height: 540px;
+  overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+}
+.syslog-entry { padding: 1px 4px; border-radius: 2px; cursor: default; }
+.syslog-entry:hover { background: rgba(255,255,255,0.04); }
+.syslog-line-num { color: #4a5568; user-select: none; margin-right: 8px; display: inline-block; width: 40px; text-align: right; }
+.syslog-time { color: #718096; }
+.syslog-lvl-ERROR { color: #fc8181; }
+.syslog-lvl-WARNING { color: #f6ad55; }
+.syslog-lvl-INFO { color: #63b3ed; }
+.syslog-lvl-DEBUG { color: #68d391; }
+
+html.dark .syslog-search { background: #1a1a3e; border-color: var(--border); color: #e2e8f0; }
+html.dark .syslog-filter { background: #2d2d5e; border-color: var(--border); color: #c0c0e0; }
+html.dark .syslog-filter:hover { background: #3d3d7e; }
+html.dark .syslog-filter.active { background: #4361ee; border-color: #4361ee; color: #fff; }
+html.dark .syslog-autorefresh { color: #a0aec0; }

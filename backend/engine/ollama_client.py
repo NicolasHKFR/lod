@@ -1,5 +1,4 @@
 import json
-import logging
 import urllib.request
 import urllib.error
 
@@ -8,8 +7,9 @@ from pydantic import ValidationError
 from backend.config import OLLAMA_URL, MODEL_NAME, LLM_TIMEOUT, MAX_TOKENS
 from backend.engine.prompt_builder import build_full_payload
 from backend.api.schemas import LLMOutput
+from backend.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -48,10 +48,10 @@ def call_llm(control_text: str, evidence_text: str, endpoint_url: str = None, mo
             resp = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
             body = resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
-            logger.error(f"LLM HTTP error: {e.code} {e.reason}")
+            logger.error(f"LLM HTTP error: {e.code} {e.reason}", exc_info=True)
             raise
         except urllib.error.URLError as e:
-            logger.error(f"LLM connection error: {e.reason}")
+            logger.error(f"LLM connection error: {e.reason}", exc_info=True)
             raise
 
         raw = body.strip()

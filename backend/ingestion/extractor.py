@@ -1,7 +1,8 @@
 import os
-import logging
 
-logger = logging.getLogger(__name__)
+from backend.logger import get_logger
+
+logger = get_logger(__name__)
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".csv", ".log", ".png", ".jpg", ".jpeg"}
 

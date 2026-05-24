@@ -15,7 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const sideLink = document.querySelector(`.sidebar-link[data-page="${pageId}"]`);
     if (sideLink) sideLink.classList.add("active");
     if (pageId === "history") loadHistoryPage();
-    if (pageId === "logs") loadLogsPage();
+    if (pageId === "logs") { loadLogsPage(); loadSystemLogsPage(); }
     if (pageId === "config") loadConfigPage();
     if (pageId === "chat") loadChatPage();
     if (pageId === "dashboard") loadDashboardPage();
@@ -935,6 +935,117 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch {
       container.innerHTML = "<p style='color:#ef476f;'>Error loading logs.</p>";
     }
+  }
+
+  // ========== TABS (Logs page) ==========
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab-btn");
+    if (!btn) return;
+    const bar = btn.closest(".tab-bar");
+    if (!bar) return;
+    bar.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const tab = btn.dataset.tab;
+    const parent = bar.parentElement;
+    parent.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+    const content = parent.querySelector(".tab-" + tab);
+    if (content) content.classList.add("active");
+  });
+
+  // ========== SYSTEM LOG VIEWER ==========
+  let syslogRefreshTimer = null;
+  let syslogScrollPaused = false;
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".syslog-filter");
+    if (!btn) return;
+    btn.parentElement.querySelectorAll(".syslog-filter").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    loadSystemLogsPage();
+  });
+
+  function debounce(fn, ms) {
+    let timer;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+  }
+
+  const debouncedSyslogSearch = debounce(() => loadSystemLogsPage(), 300);
+
+  document.addEventListener("input", (e) => {
+    if (e.target.id === "syslog-search") debouncedSyslogSearch();
+  });
+
+  document.addEventListener("change", (e) => {
+    if (e.target.id === "syslog-refresh-toggle") {
+      if (e.target.checked) startSyslogAutoRefresh();
+      else stopSyslogAutoRefresh();
+    }
+  });
+
+  document.addEventListener("scroll", (e) => {
+    const container = e.target.closest(".syslog-container");
+    if (!container) return;
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+    syslogScrollPaused = !atBottom;
+  }, true);
+
+  function startSyslogAutoRefresh() {
+    stopSyslogAutoRefresh();
+    syslogRefreshTimer = setInterval(() => {
+      const tab = document.querySelector(".tab-system");
+      if (!tab || !tab.classList.contains("active")) return;
+      if (!document.getElementById("syslog-refresh-toggle").checked) return;
+      loadSystemLogsPage(true);
+    }, 3000);
+  }
+
+  function stopSyslogAutoRefresh() {
+    if (syslogRefreshTimer) { clearInterval(syslogRefreshTimer); syslogRefreshTimer = null; }
+  }
+
+  async function loadSystemLogsPage(silent) {
+    const container = document.getElementById("syslog-container");
+    if (!container) return;
+    const level = document.querySelector(".syslog-filter.active");
+    const levelVal = level ? level.dataset.level : "";
+    const searchVal = document.getElementById("syslog-search").value;
+    const params = new URLSearchParams({ lines: "500" });
+    if (levelVal) params.set("level", levelVal);
+    if (searchVal) params.set("search", searchVal);
+    try {
+      const wasAtBottom = !syslogScrollPaused;
+      const prevScrollTop = container.scrollTop;
+      const prevScrollHeight = container.scrollHeight;
+
+      const res = await fetch("/api/logs/recent?" + params.toString());
+      if (!res.ok) {
+        if (!silent) container.innerHTML = "<p style='color:#ef476f;'>Failed to load system logs.</p>";
+        return;
+      }
+      const data = await res.json();
+      const stats = document.getElementById("syslog-stats");
+      stats.textContent = `Showing ${data.returned} / ${data.total_lines} total lines`;
+
+      if (!data.entries.length) {
+        container.innerHTML = "<p style='color:#718096;'>No matching log entries.</p>";
+        return;
+      }
+
+      container.innerHTML = data.entries.map((line, i) => {
+        const lvlClass = line.match(/\[(ERROR|WARNING|INFO|DEBUG)\]/);
+        const cls = lvlClass ? "syslog-lvl-" + lvlClass[1] : "";
+        return `<div class="syslog-entry ${cls}"><span class="syslog-line-num">${i+1}</span>${escapeHtml(line)}</div>`;
+      }).join("");
+
+      if (wasAtBottom) {
+        container.scrollTop = container.scrollHeight;
+      } else {
+        container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
+      }
+    } catch {
+      if (!silent) container.innerHTML = "<p style='color:#ef476f;'>Error loading system logs.</p>";
+    }
+    startSyslogAutoRefresh();
   }
 
   // ========== CHAT PAGE ==========

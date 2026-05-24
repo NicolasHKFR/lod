@@ -502,7 +502,7 @@ Architecture Summary
 -------------
 
   9.1 Windows (Manual)
-    - Python 3.10+ required
+    - Python 3.14+ required
     - Install dependencies: pip install -r backend/requirements.txt
     - Tesseract OCR: optional, install from UB-Mannheim releases
     - Run: uvicorn backend.app:app --host 127.0.0.1 --port 8000
@@ -514,7 +514,7 @@ Architecture Summary
     - Uninstall: install.bat /uninstall
 
   9.3 Docker
-    - Dockerfile: python:3.11-slim with Tesseract, deps, app code
+    - Dockerfile: python:3.14-slim with Tesseract, deps, app code
     - docker-compose.yml: app + Ollama service with health checks
     - Persistent volumes for DB, uploads, endpoints, Ollama models
     - Deploy: docker compose up -d

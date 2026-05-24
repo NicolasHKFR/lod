@@ -1,5 +1,6 @@
 import os
-import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,11 +12,10 @@ from starlette.responses import HTMLResponse, Response
 from backend.api.routes import router
 from backend.database.models import Base
 from backend.database.crud import get_engine
+from backend.logger import setup_logging, set_correlation_id, get_logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+setup_logging()
+logger = get_logger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend")
@@ -29,6 +29,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="LOD1 Control Evidence Validator", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    cid = request.headers.get("X-Correlation-ID", uuid.uuid4().hex[:12])
+    set_correlation_id(cid)
+    qs = str(request.url.query)
+    logger.debug("%s %s [%s]", request.method, request.url.path, qs if qs else "-")
+    start = time.perf_counter()
+    response: Response = await call_next(request)
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    logger.info(
+        "%s %s -> %s (%dms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    response.headers["X-Correlation-ID"] = cid
+    return response
+
 
 templates = Jinja2Templates(directory=os.path.join(FRONTEND_DIR, "templates"))
 
