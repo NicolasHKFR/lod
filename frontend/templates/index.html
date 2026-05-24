@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LOD1 Control Evidence Validator</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>LOD1 Validator</h1>
+        <p>Control Evidence Tool</p>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="#analyze" class="active" data-page="analyze">
+          <span class="nav-icon">&#x1F52C;</span> Analyze
+        </a>
+        <a href="#dashboard" data-page="dashboard">
+          <span class="nav-icon">&#x1F4CA;</span> Dashboard
+        </a>
+        <a href="#history" data-page="history">
+          <span class="nav-icon">&#x1F4CB;</span> History
+        </a>
+        <a href="#logs" data-page="logs">
+          <span class="nav-icon">&#x1F4DC;</span> Logs
+        </a>
+        <a href="#reports" data-page="reports">
+          <span class="nav-icon">&#x1F4C4;</span> Reports
+        </a>
+        <a href="#chat" data-page="chat">
+          <span class="nav-icon">&#x1F4AC;</span> Chat
+        </a>
+        <a href="#config" data-page="config">
+          <span class="nav-icon">&#x2699;&#xFE0F;</span> Configuration
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="health-dot" id="health-dot"></span>
+        <span id="health-label">Checking...</span>
+      </div>
+      <div class="sidebar-debug-toggle" id="debug-toggle">
+        <span class="nav-icon">&#x1F50D;</span> Debug
+        <span class="debug-badge" id="debug-badge" style="display:none;">!</span>
+      </div>
+      <div class="sidebar-footer sidebar-link" id="help-link" style="cursor:pointer;user-select:none;" data-page="help">
+        <span class="nav-icon">&#x2753;</span> Help
+      </div>
+      <div class="sidebar-footer sidebar-link" id="smart-help-btn" style="cursor:pointer;user-select:none;">
+        <span class="nav-icon">&#x1F916;</span> Smart Help
+      </div>
+      <div class="sidebar-footer" id="dark-mode-toggle" style="cursor:pointer;user-select:none;">
+        <span id="dark-mode-icon">&#x1F319;</span>
+        <span id="dark-mode-label">Dark Mode</span>
+      </div>
+    </aside>
+
+    <main class="main-content">
+
+      <!-- ===== ANALYZE PAGE ===== -->
+      <section class="page active" id="page-analyze">
+        <div class="page-header">
+          <h2>Analyze Control</h2>
+          <p>Upload a control description and evidence files for automated compliance assessment</p>
+        </div>
+
+        <div class="card">
+          <h3>Input</h3>
+          <form id="analyze-form">
+            <div class="form-group">
+              <label>Connection Mode</label>
+              <div style="display:flex;gap:12px;">
+                <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:4px;">
+                  <input type="radio" name="conn-mode" value="ollama" checked> Local Ollama <span id="ollama-status" class="health-dot" title="Checking Ollama..."></span>
+                </label>
+                <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:4px;">
+                  <input type="radio" name="conn-mode" value="api"> Remote API
+                </label>
+              </div>
+            </div>
+            <div class="form-group" id="ollama-settings">
+              <label for="ollama-model">Ollama Model</label>
+              <select id="ollama-model">
+                <option value="">Detecting local models...</option>
+              </select>
+              <p style="font-size:11px;color:#888;margin-top:2px;">Uses http://localhost:11434</p>
+            </div>
+            <div class="form-group" id="api-settings" style="display:none;">
+              <label for="endpoint-select">API Endpoint</label>
+              <select id="endpoint-select"></select>
+            </div>
+            <div class="form-group" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+              <label for="batch-toggle" style="margin:0;font-weight:400;font-size:13px;display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" id="batch-toggle"> Batch mode
+              </label>
+              <label for="compare-toggle" style="margin:0;font-weight:400;font-size:13px;display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" id="compare-toggle"> Compare models
+              </label>
+              <div id="compare-models" style="display:none;flex-wrap:wrap;gap:6px;font-size:12px;"></div>
+            </div>
+            <div class="form-group">
+              <label id="controls-label" for="control-text">Control Description</label>
+              <div class="template-bar">
+                <select id="template-select" style="flex:1;min-width:100px;">
+                  <option value="">Load template...</option>
+                </select>
+                <button type="button" class="btn btn-sm btn-secondary" id="save-template-btn">Save</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="delete-template-btn">Del</button>
+              </div>
+              <textarea id="control-text" placeholder="Paste the LOD1 control description and criteria here..."></textarea>
+              <span class="token-count" id="token-count">Est. tokens: 0</span>
+            </div>
+            <div class="form-group">
+              <label for="control-file">Or upload control description as file (.txt, .md, .pdf)</label>
+              <input type="file" id="control-file" accept=".txt,.md,.pdf">
+              <div class="control-file-preview" id="control-file-preview"></div>
+              <p class="field-hint">This replaces the typed control description above. Only use this for the control criteria document, not your evidence.</p>
+            </div>
+            <div class="form-group">
+              <label>Evidence Files <span class="evidence-badge">REQUIRED</span></label>
+              <p class="field-hint">Upload the files the LLM should evaluate against the control criteria (logs, screenshots, approvals, etc.)</p>
+              <div class="drop-zone" id="drop-zone">
+                <p>Drag &amp; drop evidence files here, or click to browse</p>
+                <p class="drop-zone-hint">Supported: .pdf .png .jpg .csv .txt .log</p>
+                <div class="file-list" id="file-list"></div>
+              </div>
+              <input type="file" id="evidence-files" multiple accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.log" style="display:none">
+              <div class="evidence-warning" id="evidence-warning" style="display:none;">
+                <span class="warning-icon">&#x26A0;</span> No evidence files uploaded. The LLM will receive "No evidence provided."
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary" id="analyze-btn">Analyze Evidence</button>
+            <div class="error-msg" id="error-msg"></div>
+          </form>
+        </div>
+
+        <div class="progress-bar-container" id="progress-container">
+          <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-fill"></div></div>
+          <div class="progress-step" id="progress-step"></div>
+          <button type="button" class="btn btn-sm btn-danger" id="cancel-btn" style="display:none;margin-top:8px;">Cancel</button>
+        </div>
+
+        <div class="card result" id="result">
+          <h3>Assessment Result</h3>
+          <div class="status-row">
+            <span class="badge" id="result-status"></span>
+            <span class="confidence" id="result-confidence"></span>
+            <span class="version-badge" id="prompt-version"></span>
+          </div>
+          <div class="summary-box" id="result-summary" style="display:none;"></div>
+          <div class="warnings-box" id="result-warnings" style="display:none;"></div>
+          <div class="collapsible" id="result-findings-section">
+            <button class="collapsible-toggle open" id="result-findings-toggle">Findings</button>
+            <div class="collapsible-content open" id="result-findings-content">
+              <ul class="findings" id="result-findings"></ul>
+            </div>
+          </div>
+          <div class="collapsible" id="result-gaps-section">
+            <button class="collapsible-toggle open" id="result-gaps-toggle">Gap Analysis</button>
+            <div class="collapsible-content open" id="result-gaps-content">
+              <ul class="gaps" id="result-gaps"></ul>
+            </div>
+          </div>
+          <div class="collapsible" id="ev-preview" style="display:none;">
+            <button class="collapsible-toggle" id="ev-toggle">Show extracted text</button>
+            <div class="collapsible-content" id="ev-content"><pre id="ev-preview-text"></pre></div>
+          </div>
+          <div class="override-section" id="override-section" style="display:none;">
+            <div class="section-title">Override Assessment</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <select id="override-status">
+                <option value="COMPLIANT">COMPLIANT</option>
+                <option value="NON-COMPLIANT">NON-COMPLIANT</option>
+                <option value="INCONCLUSIVE">INCONCLUSIVE</option>
+              </select>
+              <input type="text" id="override-reason" placeholder="Reason for override (optional)" style="flex:1;min-width:150px;">
+              <button type="button" class="btn btn-secondary" id="override-btn">Override</button>
+            </div>
+          </div>
+          <div class="actions" id="export-section" style="display:none;">
+            <button type="button" class="btn btn-sm btn-secondary" id="download-csv">Download CSV</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="download-html">Download HTML Report</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="chat-about-btn">Chat about this case</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="print-result">Print</button>
+          </div>
+        </div>
+
+        <div class="card" id="batch-results" style="display:none;">
+          <h3>Batch Results</h3>
+          <table class="batch-table">
+            <thead><tr><th>Control</th><th>Status</th><th>Confidence</th></tr></thead>
+            <tbody id="batch-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== HISTORY PAGE ===== -->
+      <section class="page" id="page-history">
+        <div class="page-header">
+          <h2>Submission History</h2>
+          <p>Browse and review previous assessments</p>
+        </div>
+        <div class="card dashboard-card" id="dashboard-card" style="display:none;">
+          <h3>Dashboard</h3>
+          <div class="dashboard-grid" id="dashboard-grid"></div>
+        </div>
+        <div class="card">
+          <div class="history-filters">
+            <input type="text" class="search-input" id="hist-search" placeholder="Search control text...">
+            <select id="hist-status">
+              <option value="">All statuses</option>
+              <option value="COMPLIANT">COMPLIANT</option>
+              <option value="NON-COMPLIANT">NON-COMPLIANT</option>
+              <option value="INCONCLUSIVE">INCONCLUSIVE</option>
+            </select>
+            <input type="date" id="hist-date-from" placeholder="From">
+            <input type="date" id="hist-date-to" placeholder="To">
+          </div>
+          <table class="data-table">
+            <thead><tr><th>ID</th><th>Control</th><th>Status</th><th>Confidence</th><th>Date</th></tr></thead>
+            <tbody id="hist-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== LOGS PAGE ===== -->
+      <section class="page" id="page-logs">
+        <div class="page-header">
+          <h2>Audit Logs</h2>
+          <p>Full audit trail of submissions and overrides</p>
+        </div>
+        <div class="card">
+          <div id="logs-container">
+            <p style="color:#888;font-size:13px;">Loading logs...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== DASHBOARD PAGE ===== -->
+      <section class="page" id="page-dashboard">
+        <div class="page-header">
+          <h2>Dashboard</h2>
+          <p>Compliance analytics and trends</p>
+        </div>
+        <div class="card" id="dash-stats">
+          <h3>Overview</h3>
+          <div class="dashboard-grid" id="dash-overview"></div>
+        </div>
+        <div class="card" id="dash-trend">
+          <h3>Compliance Trend</h3>
+          <div class="trend-chart" id="dash-trend-chart"></div>
+        </div>
+        <div class="card" id="dash-distribution">
+          <h3>Status Distribution</h3>
+          <div style="display:flex;gap:24px;align-items:center;">
+            <div class="donut-chart" id="dash-donut"></div>
+            <div class="donut-legend" id="dash-legend"></div>
+          </div>
+        </div>
+        <div class="card" id="dash-failing">
+          <h3>Top Non-Compliant Controls</h3>
+          <table class="data-table"><thead><tr><th>ID</th><th>Control</th><th>Confidence</th><th>Date</th></tr></thead><tbody id="dash-failing-body"></tbody></table>
+        </div>
+      </section>
+
+      <!-- ===== REPORTS PAGE ===== -->
+      <section class="page" id="page-reports">
+        <div class="page-header">
+          <h2>Consolidated Reports</h2>
+          <p>Generate reports from multiple submissions</p>
+        </div>
+        <div class="card">
+          <div class="reports-toolbar">
+            <label style="font-size:13px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="reports-select-all"> Select all</label>
+            <span style="font-size:13px;color:#888;" id="reports-count">0 selected</span>
+            <button type="button" class="btn btn-sm btn-primary" id="reports-generate-btn">Generate Consolidated Report</button>
+          </div>
+          <table class="data-table"><thead><tr><th style="width:36px;"></th><th>ID</th><th>Control</th><th>Status</th><th>Confidence</th><th>Date</th></tr></thead><tbody id="reports-body"></tbody></table>
+        </div>
+      </section>
+
+      <!-- ===== CHAT PAGE ===== -->
+      <section class="page" id="page-chat">
+        <div class="page-header">
+          <h2>Chat with LLM</h2>
+          <p>Direct chat with available models</p>
+        </div>
+        <div class="card chat-card">
+          <div class="chat-toolbar">
+            <select id="chat-model-select" style="flex:1;min-width:120px;">
+              <option value="">Select model...</option>
+            </select>
+            <button type="button" class="btn btn-sm btn-secondary" id="chat-clear-btn">Clear</button>
+          </div>
+          <div class="chat-messages" id="chat-messages">
+            <div class="chat-msg chat-msg-system">
+              <div class="chat-msg-role">System</div>
+              <div class="chat-msg-text">Send a message to start chatting with the selected model.</div>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <textarea id="chat-input" placeholder="Type your message..." rows="2"></textarea>
+            <button type="button" class="btn btn-primary" id="chat-send-btn">Send</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== HELP PAGE ===== -->
+      <section class="page" id="page-help">
+        <div class="page-header">
+          <h2>Help &amp; User Manual</h2>
+          <p>Complete documentation for the LOD1 Validator</p>
+        </div>
+        <div class="card">
+          <div id="help-content" class="help-page">Loading user manual...</div>
+        </div>
+      </section>
+
+      <!-- ===== CONFIG PAGE ===== -->
+      <section class="page" id="page-config">
+        <div class="page-header">
+          <h2>Configuration</h2>
+          <p>Edit application settings</p>
+        </div>
+        <div class="card">
+          <div class="config-field">
+            <label for="cfg-model">Model Name</label>
+            <input type="text" id="cfg-model" placeholder="e.g. llama3:8b-instruct-q8_0">
+          </div>
+          <div class="config-field">
+            <label for="cfg-timeout">LLM Timeout (seconds)</label>
+            <input type="number" id="cfg-timeout" min="10" max="300">
+          </div>
+          <div class="config-field">
+            <label for="cfg-max-tokens">Max Tokens</label>
+            <input type="number" id="cfg-max-tokens" min="512" max="128000">
+          </div>
+          <div class="config-field">
+            <label>Endpoints <button type="button" class="btn btn-sm btn-secondary" id="add-endpoint-btn">+ Add</button></label>
+            <div class="endpoint-list" id="endpoint-list"></div>
+          </div>
+          <div class="config-actions">
+            <button type="button" class="btn btn-primary" id="save-config-btn">Save Configuration</button>
+            <button type="button" class="btn btn-secondary" id="reset-config-btn">Reset</button>
+          </div>
+          <div class="config-success" id="config-success">Configuration saved successfully.</div>
+          <div class="error-msg" id="config-error"></div>
+        </div>
+
+        <div class="card danger-zone">
+          <h3>&#x26A0; Danger Zone</h3>
+          <p style="font-size:13px;color:#888;margin-bottom:8px;">Clears all submissions, overrides, and audit logs. This action is <strong>irreversible</strong>.</p>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="db-clear-confirm" placeholder='Type "DELETE" to confirm' style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;flex:1;min-width:120px;">
+            <button type="button" class="btn btn-danger" id="db-clear-btn" disabled>Clear All Data</button>
+          </div>
+          <div class="config-success" id="db-clear-success"></div>
+          <div class="error-msg" id="db-clear-error"></div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Debug Panel -->
+    <aside class="debug-panel" id="debug-panel">
+      <div class="debug-header">
+        <h3>Debug Inspector</h3>
+        <button class="debug-close" id="debug-close">&times;</button>
+      </div>
+      <div class="debug-content">
+        <div id="debug-raw-status" style="padding:4px 12px;font-size:11px;color:#ffd166;"></div>
+        <div class="debug-section">
+          <button class="debug-toggle">Raw Server Response</button>
+          <div class="debug-body"><pre id="debug-raw-data">No data yet.</pre></div>
+        </div>
+        <div class="debug-section">
+          <button class="debug-toggle open">Prompt Sent to LLM</button>
+          <div class="debug-body open"><pre id="debug-prompt">No data yet. Run an analysis first.</pre></div>
+        </div>
+        <div class="debug-section">
+          <button class="debug-toggle open">Raw LLM Response</button>
+          <div class="debug-body open"><pre id="debug-response">No data yet.</pre></div>
+        </div>
+        <div class="debug-section">
+          <button class="debug-toggle">Extracted Evidence Text</button>
+          <div class="debug-body"><pre id="debug-evidence">No data yet.</pre></div>
+        </div>
+        <div class="debug-section">
+          <button class="debug-toggle">Control Description</button>
+          <div class="debug-body"><pre id="debug-control">No data yet.</pre></div>
+        </div>
+      </div>
+    </aside>
+
+  <!-- Detail overlay (shared by History & Logs) -->
+  <div class="detail-overlay" id="detail-overlay">
+    <div class="detail-panel" id="detail-panel">
+      <button class="detail-close" id="detail-close">&times;</button>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js?v=2"></script>
+</body>
+</html>

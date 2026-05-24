@@ -1,0 +1,581 @@
+Project Specification: Automated LOD1 Control Evidence Validator
+================================================================
+
+This document details the functional and technical specifications for an
+internal web-based tool designed to automate the validation of Line of
+Defense 1 (LOD1) Technology Risk Management controls using a Large
+Language Model (LLM).
+
+
+1. Project Overview
+-------------------
+
+Purpose
+  LOD1 teams spend significant time manually checking evidence (logs,
+  screenshots, approvals) against technical risk control descriptions.
+  This tool automates the initial assessment, providing a binary
+  confirmation (Pass/Fail) on whether the provided evidence satisfies
+  the control requirements.
+
+Architecture Summary
+   Frontend:    Web UI (Jinja2 server-rendered templates) with left
+                sidebar navigation and SPA-style hash routing across
+                 7 pages: Analyze, Dashboard, History, Logs, Reports,
+                Chat, Configuration.
+                Right-side Debug Inspector panel for LLM troubleshooting.
+  Backend:     Python FastAPI orchestration engine with SSE streaming
+               for real-time progress updates.
+  AI Engine:   Local LLM integration via Ollama API (default) or any
+               compatible OpenAI-style /api/generate endpoint.
+  Database:    SQLite via SQLAlchemy (submissions + override audit trail).
+
+
+2. System Workflow
+------------------
+
+[User] -> (Uploads Control & Evidence) -> [Web UI]
+                                              |
+ [Ollama API / Remote Endpoint] <- (Structured Prompt) <- [Backend Engine]
+       |
+       +--> (JSON Response) --> [Web UI] --> (Displays Pass/Fail + Reasoning)
+                                              |
+                                              +--> [Debug Inspector Panel]
+                                                   (raw prompt, raw response,
+                                                    extracted evidence, control)
+
+2.1 Connection Modes
+
+  The user can choose between two connection modes:
+
+  Local Ollama
+    - Auto-detects running Ollama instance at localhost:11434
+    - Fetches available models via GET /api/ollama/tags
+    - User selects a model from the dropdown
+    - Sends to http://localhost:11434/api/generate
+
+  Remote API
+    - Uses endpoint selected from a dropdown populated by endpoints.txt
+    - Falls back to the default model configured in the Settings page
+    - Supports any LLM API that accepts the Ollama-compatible payload
+      format (model, system prompt, user prompt, format: json)
+
+
+3. User Interface
+-----------------
+
+  3.1 Sidebar Navigation (persistent left panel)
+
+  Analyze   (#analyze)   - Main upload form and result dashboard
+  Dashboard (#dashboard) - Full analytics: overview stats, compliance
+                           trend bar chart, donut distribution chart,
+                           top non-compliant controls
+  History   (#history)   - Full-page browsable submission history
+  Logs      (#logs)      - Chronological audit trail with expandable
+                           raw LLM responses and override events
+   Reports   (#reports)   - Multi-select submissions + consolidated
+                           HTML report generation
+  Chat      (#chat)      - Direct chat with available LLM models
+  Configuration (#config)- Editable settings: model, timeout, max tokens,
+                           endpoints list (add/remove rows, persists to
+                           endpoints.txt)
+  Help      (#help)      - Rendered user manual (README.md) displayed
+                           with full markdown formatting
+  Smart Help (button)    - Opens Chat page with the user manual loaded as
+                           context; ask questions interactively
+  Debug     (toggle)     - Opens/closes the Debug Inspector right panel
+  Dark mode (toggle)     - Toggles dark/light theme (persisted in
+                           localStorage, default respects last choice)
+  Health indicator       - Shows LLM + OCR + PDF availability status
+
+3.2 Analyze Page (input section)
+
+  Connection Mode
+    - Radio buttons: "Local Ollama" (default) / "Remote API"
+    - Ollama mode: model dropdown fetched live from local Ollama
+    - Ollama status indicator dot (green/red) next to label, polls every 30s
+    - API mode: endpoint dropdown from endpoints.txt
+
+  Control Description
+    - Text area for pasting LOD1 control description and criteria
+    - OR file upload for .txt, .md, .pdf (clearly labelled as control
+      description, not evidence)
+    - Template library: save/load control description templates via
+      localStorage (Save / Del buttons + dropdown selector)
+
+  Control File Upload
+    - Upload .txt, .md, .pdf files as alternative to typing
+    - Shows file preview panel with filename, size, first 500 chars
+    - Includes hint text clarifying this replaces the typed control
+
+  Token Counter
+    - Dynamic estimated token count displayed below the control textarea
+    - Updates on input: (control chars + evidence file sizes * 0.25) / 4
+    - Turns red when estimate exceeds 6000 tokens
+
+  Evidence Files
+    - Drag-and-drop multi-file upload zone with "REQUIRED" badge
+    - Hint text explaining these are the files the LLM evaluates
+    - Warning banner when no evidence files have been added
+    - Supported: .pdf, .png, .jpg, .csv, .txt, .log
+    - Text extraction: plain text parser, PyMuPDF for PDFs,
+      Tesseract OCR for scanned PDFs and images
+    - Magic-byte validation to reject renamed files
+    - Parallel extraction via asyncio.gather (both SSE and non-streaming)
+    - Per-file toggleable preview showing first 300 chars of text,
+      or inline image thumbnail for .png/.jpg files
+    - Evidence labeling: file names are editable inline text inputs
+      for custom labeling
+    - On submit: confirmation dialog if no evidence files attached
+
+  Batch Mode (checkbox)
+    - Switches control textarea to accept multiple controls
+      separated by "---"
+    - Submits to /api/analyze/batch
+    - SSE streaming with per-control progress: "Processing control N of M"
+    - Returns a summary table of all results
+
+  Compare Models (checkbox)
+    - Select two or more Ollama models via checkboxes
+    - Submits the same control + evidence to each model sequentially
+    - Shows a side-by-side comparison table with status, confidence,
+      and summary for each model
+
+  "Analyze Evidence" button
+    - Triggers SSE streaming endpoint for real-time progress updates
+    - Progress bar shows: "Extracting N file(s)...", "Sending to LLM..."
+    - Steps: extracting -> analyzing -> result
+
+  Keyboard Shortcuts
+    - Ctrl+Enter: submits the form (Analyze page only)
+    - Esc: closes any open overlay (debug panel, detail overlay)
+
+3.3 Analyze Page (result section)
+
+  Status Badge (high-visibility color-coded)
+    - COMPLIANT    (green)   - Evidence is sufficient
+    - NON-COMPLIANT (red)    - Evidence insufficient or missing elements
+    - INCONCLUSIVE  (yellow) - Cannot determine due to formatting or
+                               missing context
+
+  Confidence Score
+    - 0-100% metric from the LLM
+
+  Executive Summary
+    - 1-2 sentence summary box displayed below the status row,
+      sourced from the LLM's "summary" field
+
+  Extraction Warnings
+    - Warning box if any files could not be extracted (empty content,
+      extraction error, OCR failure) or if no evidence was uploaded
+
+  Findings (collapsible)
+    - Bulleted list of evidence points supporting the control
+    - Collapsible toggle header showing count e.g. "Findings (3)"
+
+  Gap Analysis (collapsible)
+    - Bulleted list of missing or insufficient elements
+    - Collapsible toggle header showing count e.g. "Gap Analysis (2)"
+
+  Extracted Text Preview
+    - Collapsible panel showing raw text extracted from uploaded files
+
+  Override Section
+    - Dropdown to manually change status
+    - Text field for reason
+    - Saves override to database for audit trail
+
+  Export Actions
+    - Download CSV button
+    - Download HTML Report button (formatted HTML document with
+      all assessment fields, styling, and raw LLM response)
+    - Print button
+
+3.4 History Page
+
+  Dashboard
+    - Stats cards at top: Compliant count (green), Non-Compliant count
+      (red), Inconclusive count (yellow), Average Confidence
+    - Bar chart showing relative proportions of the three statuses
+    - Visible on any history filter state; hidden when no results
+
+  Filters
+    - Search by control text (client-side + server-side)
+    - Status filter dropdown
+    - Date range pickers
+
+  Results Table
+    - Columns: ID, Control (truncated), Status badge, Confidence, Date
+    - Click any row to open a detail overlay
+
+  Detail Overlay (modal)
+    - Full control description
+    - Full extracted evidence text
+    - Executive summary
+    - Complete findings and gap analysis
+    - Raw LLM response (JSON)
+    - "Inspect in Debug Panel" button to populate right-side panel
+    - Export CSV, HTML, and Print buttons
+
+3.5 Logs Page
+
+  Audit trail showing:
+    - Submissions with summary, findings, gaps, raw LLM response
+    - Override events (original status -> new status, reason)
+  Entries sorted by timestamp (most recent first)
+  Click to expand/collapse raw details
+  Each submission entry has "Inspect in Debug Panel" button
+
+3.6 Chat Page
+
+  Model selector dropdown populated from Ollama (fetched live on page load)
+  Chat message area with scrollable history:
+    - User messages (right-aligned, blue bubble)
+    - Assistant messages (left-aligned, white bubble)
+    - System messages (centered, yellow)
+  Textarea input + Send button (Ctrl+Enter also sends)
+  Clear button to reset conversation
+  SSE streaming response — response text appears incrementally
+
+  Chat About a Case:
+    - "Chat about this case" button in the result card (export section)
+    - "Chat about this case" button in the History detail overlay
+    - Clicking either stores the case context (control, evidence, previous
+      assessment) and navigates to the Chat page
+    - The case context is sent as the system prompt on each message,
+      so the LLM always knows what case is being discussed
+    - Clear button resets both the conversation and the context
+
+  Backend: POST /api/chat/stream (form-encoded prompt + model + system)
+           POST /api/chat (non-streaming, returns JSON)
+
+3.7 Dashboard Page
+
+  Overview stats cards (6-column grid):
+    - Total Submissions, Compliant, Non-Compliant, Inconclusive,
+      Average Confidence, Compliance Rate
+  Compliance Trend (bar chart):
+    - Groups submissions by date (last 14 days)
+    - Shows daily compliance percentage as vertical bars
+  Status Distribution (SVG donut chart):
+    - Three-segment circle: green (compliant), red (non-compliant),
+      yellow (inconclusive)
+    - Center shows average confidence percentage
+    - Legend below with counts
+  Top Non-Compliant Controls:
+    - Table of up to 10 worst-performing controls sorted by
+      confidence score (ascending)
+    - Columns: ID, Control (truncated), Confidence, Date
+  Data sourced from GET /api/history with large limit
+
+3.8 Reports Page
+
+  Submission list with checkboxes (loaded from /api/history)
+  Toolbar:
+    - "Select all" checkbox
+    - Selected count display
+    - "Generate Consolidated Report" button
+  Clicking generate posts to POST /api/reports/consolidated
+    with comma-separated submission IDs
+  Backend produces a full HTML document with:
+    - Aggregate stats (total, compliant/non-compliant/inconclusive
+      counts, average confidence)
+    - Per-submission breakdown table (ID, control, status,
+      confidence, summary, findings, gaps)
+  Opens the HTML report in a new tab for download/print
+
+3.9 Configuration Page
+
+  Fields
+    - Model Name (default: llama3:8b-instruct-q8_0)
+    - LLM Timeout in seconds (default: 60)
+    - Max Tokens (default: 6000)
+    - Endpoints list: dynamic add/remove rows of URLs
+
+  Danger Zone
+    - "Clear All Data" button at the bottom of the page
+    - Two-step confirmation: user must type "DELETE" to enable the button
+    - Sends DELETE /api/database to empty submissions and overrides tables
+    - Irreversible — shows success/error feedback
+    - Red-bordered card visually distinguishes the danger section
+
+  Actions
+    - Save: persists endpoints to endpoints.txt, updates in-memory config
+    - Reset: reverts form to current server-side values
+  Changes survive server restart (endpoints.txt written to disk)
+
+3.10 Debug Inspector Panel (right-side, toggleable)
+
+  Toggle via "Debug" button in sidebar. Auto-opens after analysis.
+  Sections (first two open by default):
+    - Raw Server Response: full JSON object received from the backend
+    - Prompt Sent to LLM: full system + user prompt payload
+    - Raw LLM Response: raw JSON returned by the LLM
+    - Extracted Evidence Text: evidence parsed from the prompt
+    - Control Description: control parsed from the prompt
+  Populated on:
+    - Analyze result (auto)
+    - History detail overlay ("Inspect in Debug Panel" button)
+    - Logs detail entries ("Inspect in Debug Panel" button)
+  Global click handler for all "Inspect" buttons across dynamic content
+
+3.11 Help Page
+
+  Fetches README.md content via GET /api/readme and renders it with
+  a simple client-side markdown-to-HTML converter (no dependencies).
+  Supports: headings (#), bold (**), code blocks (```), inline code (`),
+  lists (-, *), tables (|), links [text](url), blockquotes (>), HRs (---).
+
+  Smart Help button in the sidebar fetches the README content and
+  navigates to the Chat page with it loaded as the system prompt context.
+  The LLM is instructed to answer questions based on the user manual.
+
+
+4. Backend Processing Engine
+-----------------------------
+
+4.1 Ingestion Pipeline
+
+  File type detection via magic bytes (first 4 bytes):
+    - PDF:  %PDF
+    - PNG:  \x89PNG
+    - JPEG: \xff\xd8\xff
+    - Text: attempt UTF-8 decode
+
+  Text extraction:
+    - .txt, .md, .csv, .log: UTF-8 plain text
+    - .pdf: PyMuPDF (fitz); falls back to OCR if no text layer
+    - .png, .jpg, .jpeg: Tesseract OCR
+
+  Extraction warnings propagated to result:
+    - "[Empty content]" and "[Could not extract text]" markers in
+      evidence text generate warnings shown in the result card
+
+4.2 Context Consolidation
+
+  Control description and extracted evidence are consolidated into a
+  structured JSON payload for the LLM.
+
+  Evidence truncation:
+    - Token estimator (~4 chars/token)
+    - If evidence exceeds MAX_TOKENS, keeps first 60% + last 30%
+      with a truncation marker
+    - Same truncated text saved to DB, so audit matches what LLM received
+    - DB no longer uses separate hard-coded 10K character truncation
+
+
+5. Prompt Engineering & LLM Routing
+-----------------------------------
+
+5.1 Prompt Structure
+
+  System Prompt:
+    "You are an objective compliance assessor..."
+    Biased toward COMPLIANT as default when evidence reasonably matches
+    Includes a few-shot example of a trivial COMPLIANT case
+    + strict JSON output schema:
+      { status, confidence_score, summary, findings[], gaps_identified[] }
+
+  User Prompt:
+    <CONTROL_DESCRIPTION>...</CONTROL_DESCRIPTION>
+    <EVIDENCE>...</EVIDENCE>
+
+  Prompt version tracked in config.py (current: "2.0")
+
+5.2 Injection Protection
+
+  User input sanitization: </  escaped to  <\/  prevents XML-tag
+  injection that could override system instructions.
+
+5.3 Response Parsing
+
+  - Strips markdown code blocks if present
+  - Tries JSON parse; falls back to INCONCLUSIVE
+  - Validates through Pydantic LLMOutput model with type constraints
+    (status must be literal, confidence 0-100 integer)
+  - Retries once with temperature=0.0 and stricter instruction if
+    first parse fails
+  - Full raw prompt payload saved to DB for audit troubleshooting
+
+5.4 Mandatory JSON Output Schema
+
+  {
+    "status": "COMPLIANT | NON-COMPLIANT | INCONCLUSIVE",
+    "confidence_score": 85,
+    "summary": "The evidence confirms the firewall change followed the approved change management process.",
+    "findings": [
+      "Evidence shows the firewall change was approved...",
+      "Timestamp matches the execution log window."
+    ],
+    "gaps_identified": [
+      "Missing post-implementation verification log."
+    ]
+  }
+
+
+6. Audit Trail
+--------------
+
+  All submissions stored in SQLite (lod_audit.db):
+    - Control text, evidence text (truncated to MAX_TOKENS)
+    - Status, confidence score, executive summary, findings, gaps
+    - Raw LLM response (full JSON)
+    - Raw prompt payload (full JSON sent to LLM)
+    - Prompt version tag (for drift tracking)
+
+  Override events stored separately:
+    - Original status, new status, reason, timestamp
+
+  Logs page exposes the full audit trail with chronologically merged
+  submission and override entries. Submissions include "Inspect in
+  Debug Panel" for raw prompt/response inspection, plus CSV and
+  HTML download buttons.
+
+
+7. Non-Functional Requirements
+-----------------------------
+
+  Security & Privacy
+    - Zero data leaves internal infrastructure
+    - Ollama runs on-premises (or any internal API endpoint)
+    - Configurable endpoints in endpoints.txt
+
+  Performance
+    - Document processing + LLM inference under 30 seconds
+    - Parallel file extraction via asyncio.gather (all endpoints)
+    - SSE streaming for real-time progress feedback
+
+  Scalability
+    - Handles log files up to 50MB
+    - Evidence text truncated at configurable MAX_TOKENS (default 6000)
+    - Upload size limit: 50MB per file
+
+  Accessibility
+    - Dark mode toggle with preference persisted in localStorage
+    - Full CSS custom property theming (dark/light via :root + html.dark)
+    - Keyboard shortcuts: Ctrl+Enter (submit), Esc (close panels)
+
+
+8. API Endpoints
+----------------
+
+  POST /api/analyze           - Submit control + evidence (returns JSON)
+  POST /api/analyze/stream    - SSE streaming version with progress
+  POST /api/analyze/batch     - Multi-control batch analysis (returns JSON
+                                or SSE streaming with per-control progress
+                                based on sse=true param)
+  POST /api/override/{id}     - Override submission status
+  GET  /api/endpoints         - List configured API endpoints
+  GET  /api/health            - LLM + DB + OCR + PDF connectivity check
+  GET  /api/history           - Filtered submission history
+  GET  /api/submit/{id}       - Full submission detail (includes raw_prompt)
+  GET  /api/export/{id}       - Export CSV (?format=csv) or formatted
+                                HTML report (?format=html)
+  GET  /api/logs              - Full audit trail (includes raw_prompt)
+  GET  /api/config            - Current settings
+  POST /api/config            - Update settings (persists endpoints.txt)
+  DELETE /api/database        - Clear all submissions and overrides
+  POST /api/chat              - Direct LLM chat (non-streaming, returns
+                                {response, model})
+  POST /api/chat/stream       - SSE streaming version of chat
+  POST /api/reports/consolidated - Generate consolidated HTML report
+                                from comma-separated submission IDs
+  GET  /api/readme            - Returns README.md content as JSON {content}
+  GET  /api/ollama/tags       - List local Ollama models
+  GET  /favicon.ico           - Returns empty favicon (prevents 404)
+
+
+8.1 Testing
+
+  Test suite uses pytest with a temporary SQLite database fixture:
+    - 35 tests across 4 modules
+    - Unit tests: _estimate_tokens, _truncate, _parse_response,
+      _fallback, sanitize, build_prompt, build_full_payload,
+      save_submission, get_submission, save_override, override
+      nonexistent, get_all_submissions
+    - Integration tests: health endpoint, config get/set, endpoints,
+      index page, favicon
+    - Run: pytest backend/tests/ -v
+    - Coverage: pytest --cov=backend
+
+
+9. Deployment
+-------------
+
+  9.1 Windows (Manual)
+    - Python 3.10+ required
+    - Install dependencies: pip install -r backend/requirements.txt
+    - Tesseract OCR: optional, install from UB-Mannheim releases
+    - Run: uvicorn backend.app:app --host 127.0.0.1 --port 8000
+
+  9.2 Windows (Installer)
+    - install.bat automates: venv creation, pip install, Tesseract OCR
+      download/install, Start Menu and Desktop shortcuts, DB init
+    - Run as Administrator for full functionality
+    - Uninstall: install.bat /uninstall
+
+  9.3 Docker
+    - Dockerfile: python:3.11-slim with Tesseract, deps, app code
+    - docker-compose.yml: app + Ollama service with health checks
+    - Persistent volumes for DB, uploads, endpoints, Ollama models
+    - Deploy: docker compose up -d
+
+
+10. Project Structure
+---------------------
+
+  lod/
+  +-- spec.txt                        # This document
+  +-- README.md                       # User manual / quick start guide
+  +-- endpoints.txt                   # User-editable endpoint list
+  +-- start.bat                       # Windows launcher (uses venv if present)
+  +-- install.bat                     # Windows installer / uninstaller
+  +-- Dockerfile                      # Container build
+  +-- docker-compose.yml              # App + Ollama orchestration
+  +-- .github/
+  |   +-- workflows/
+  |       +-- ci.yml                  # CI pipeline: lint (ruff), test
+  |                                    (pytest + coverage), build (Docker)
+  +-- backend/
+  |   +-- app.py                      # FastAPI entry point (lifespan pattern)
+  |   +-- config.py                   # Settings (env vars + file I/O)
+  |   +-- requirements.txt            # Python dependencies
+  |   +-- requirements-dev.txt        # Test dependencies (pytest, pytest-cov)
+  |   +-- alembic.ini                 # Alembic migration config
+  |   +-- alembic/
+  |   |   +-- env.py                  # Alembic environment (auto-detects DB path)
+  |   |   +-- script.py.mako          # Migration template
+  |   |   +-- versions/
+  |   |       +-- 0001_initial.py     # Initial schema (submissions + overrides)
+  |   +-- tests/
+  |   |   +-- __init__.py
+  |   |   +-- conftest.py             # Fixtures (temporary SQLite DB)
+  |   |   +-- test_ollama_client.py   # Unit tests: _estimate_tokens, _truncate,
+  |   |   |                            _parse_response, _fallback
+  |   |   +-- test_prompt_builder.py  # Unit tests: sanitize, build_prompt,
+  |   |   |                            build_full_payload
+  |   |   +-- test_crud.py            # Unit tests: save/get/override
+  |   |   +-- test_routes.py          # Integration tests: health, config,
+  |   |                                endpoints, index, favicon
+  |   +-- uploads/                    # Temporary file uploads
+  +-- database/
+  |   |   +-- models.py               # SQLAlchemy: Submission, Override
+  |   |   +-- crud.py                 # DB operations
+  |   +-- ingestion/
+  |   |   +-- extractor.py            # Text extraction + magic-byte detection
+  |   +-- engine/
+  |   |   +-- prompt_builder.py       # System prompt + sanitization
+  |   |   +-- ollama_client.py        # LLM call + retry + parse + truncation
+  |   +-- api/
+  |       +-- schemas.py              # Pydantic models (LLMOutput, etc.)
+  |       +-- routes.py               # All API routes + warnings
+  +-- frontend/
+      +-- templates/
+      |   +-- index.html              # Full UI with sidebar, 8 pages + help + debug panel
+      +-- static/
+           +-- css/style.css           # Layout + component styles + debug panel
+                                        + dark mode + dashboard + compare table
+                                        + reports
+           +-- js/app.js               # SPA router + page logic + debug panel
+                                        + keyboard shortcuts + token counter
+                                        + template library + compare + dark mode
+                                        + dashboard + reports

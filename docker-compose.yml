@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    container_name: lod-validator
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_URL=http://ollama:11434/api/generate
+      - MODEL_NAME=llama3:8b-instruct-q8_0
+      - LLM_TIMEOUT=120
+      - MAX_TOKENS=6000
+    volumes:
+      - ./backend/lod_audit.db:/app/backend/lod_audit.db
+      - ./backend/uploads:/app/backend/uploads
+      - ./endpoints.txt:/app/endpoints.txt
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lod-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
