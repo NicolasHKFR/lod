@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse, Response
 
 from backend.config import ROOT_DIR, UPLOAD_DIR, MAX_FILE_SIZE, load_endpoints, save_endpoints, MODEL_NAME, LLM_TIMEOUT, MAX_TOKENS, PROMPT_VERSION, LLM_PROVIDER, API_KEY
 from backend.ingestion.extractor import extract_text
-from backend.engine.ollama_client import call_llm as call_ollama, _truncate
+from backend.engine.ollama_client import call_llm as call_ollama, _truncate, _build_multipart, _parse_forge_response
 from backend.database import crud
 from backend.logger import get_logger
 
@@ -366,7 +366,7 @@ async def ollama_tags(url: str = Query("")):
 async def list_models(url: str = Query(""), provider: str = Query("")):
     import urllib.request
     use_provider = (provider or LLM_PROVIDER).lower()
-    if use_provider == "openai":
+    if use_provider in ("openai", "forge"):
         target = url.strip() or "http://localhost:11434/v1/models"
         headers = {"Content-Type": "application/json"}
         key = API_KEY
@@ -379,7 +379,7 @@ async def list_models(url: str = Query(""), provider: str = Query("")):
         req = urllib.request.Request(target, headers=headers, method="GET")
         resp = urllib.request.urlopen(req, timeout=5)
         body = json.loads(resp.read().decode("utf-8"))
-        if use_provider == "openai":
+        if use_provider in ("openai", "forge"):
             raw = body.get("data", body) if isinstance(body, dict) else body
             models = [m["id"] for m in raw if isinstance(m, dict) and "id" in m]
         else:
@@ -531,6 +531,7 @@ async def chat(
     api_key: str = Form(""),
 ):
     try:
+        import uuid
         import urllib.request
         url = endpoint_url.strip() or load_endpoints()[0]
         selected_model = model.strip() or MODEL_NAME
@@ -551,6 +552,19 @@ async def chat(
                 "stream": False,
                 "temperature": 0.7,
             }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        elif use_provider == "forge":
+            text_input = f"{system.strip()}\n\n{prompt}" if system.strip() else prompt
+            boundary = uuid.uuid4().hex
+            body = _build_multipart(body_parts=[
+                ("text_input", text_input),
+                ("files", None),
+            ], boundary=boundary)
+            headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         else:
             payload = {
                 "model": selected_model,
@@ -561,9 +575,9 @@ async def chat(
             if system.strip():
                 payload["system"] = system.strip()
             headers = {"Content-Type": "application/json"}
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         resp = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
         body = resp.read().decode("utf-8")
 
@@ -573,6 +587,8 @@ async def chat(
                 text = resp_json["choices"][0]["message"]["content"]
             except (KeyError, IndexError, json.JSONDecodeError):
                 text = body
+        elif use_provider == "forge":
+            text = _parse_forge_response(body)
         else:
             try:
                 resp_json = json.loads(body)
@@ -597,6 +613,7 @@ async def chat_stream(
 ):
     async def event_stream():
         try:
+            import uuid
             import urllib.request
             url = endpoint_url.strip() or load_endpoints()[0]
             selected_model = model.strip() or MODEL_NAME
@@ -617,6 +634,19 @@ async def chat_stream(
                     "stream": False,
                     "temperature": 0.7,
                 }
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            elif use_provider == "forge":
+                text_input = f"{system.strip()}\n\n{prompt}" if system.strip() else prompt
+                boundary = uuid.uuid4().hex
+                body = _build_multipart(body_parts=[
+                    ("text_input", text_input),
+                    ("files", None),
+                ], boundary=boundary)
+                headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+                if key:
+                    headers["Authorization"] = f"Bearer {key}"
+                req = urllib.request.Request(url, data=body, headers=headers, method="POST")
             else:
                 payload = {
                     "model": selected_model,
@@ -627,9 +657,9 @@ async def chat_stream(
                 if system.strip():
                     payload["system"] = system.strip()
                 headers = {"Content-Type": "application/json"}
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
             resp = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
             body = resp.read().decode("utf-8")
 
@@ -639,6 +669,8 @@ async def chat_stream(
                     text = resp_json["choices"][0]["message"]["content"]
                 except (KeyError, IndexError, json.JSONDecodeError):
                     text = body
+            elif use_provider == "forge":
+                text = _parse_forge_response(body)
             else:
                 try:
                     resp_json = json.loads(body)
@@ -732,7 +764,7 @@ async def get_config():
 
 @router.post("/config")
 async def update_config(data: dict):
-    global MODEL_NAME, LLM_TIMEOUT, MAX_TOKENS
+    global MODEL_NAME, LLM_TIMEOUT, MAX_TOKENS, LLM_PROVIDER, API_KEY
 
     if "model" in data:
         MODEL_NAME = data["model"]
@@ -740,6 +772,10 @@ async def update_config(data: dict):
         LLM_TIMEOUT = int(data["timeout"])
     if "max_tokens" in data:
         MAX_TOKENS = int(data["max_tokens"])
+    if "provider" in data and data["provider"] in ("ollama", "openai", "forge"):
+        LLM_PROVIDER = data["provider"]
+    if "api_key" in data:
+        API_KEY = data["api_key"]
     if "endpoints" in data and isinstance(data["endpoints"], list):
         save_endpoints([e.strip() for e in data["endpoints"] if e.strip()])
 

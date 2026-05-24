@@ -1,11 +1,12 @@
 import json
+import uuid
 import urllib.request
 import urllib.error
 
 from pydantic import ValidationError
 
 from backend.config import OLLAMA_URL, MODEL_NAME, LLM_TIMEOUT, MAX_TOKENS, LLM_PROVIDER, API_KEY
-from backend.engine.prompt_builder import build_full_payload, build_openai_payload
+from backend.engine.prompt_builder import build_full_payload, build_openai_payload, build_forge_text
 from backend.api.schemas import LLMOutput
 from backend.logger import get_logger
 
@@ -39,6 +40,8 @@ def call_llm(
     provider = (provider or LLM_PROVIDER).lower()
     if provider == "openai":
         return _call_openai(control_text, evidence_text, endpoint_url, model_name, api_key)
+    if provider == "forge":
+        return _call_forge(control_text, evidence_text, endpoint_url, api_key)
     return _call_ollama(control_text, evidence_text, endpoint_url, model_name)
 
 
@@ -131,6 +134,83 @@ def _call_openai(
     result["_raw"] = content
     result["_raw_prompt"] = json.dumps(payload, indent=2)
     return result
+
+
+def _call_forge(
+    control_text: str,
+    evidence_text: str,
+    endpoint_url: str = None,
+    api_key: str = None,
+) -> dict:
+    url = endpoint_url or OLLAMA_URL
+    truncated_evidence = _truncate(evidence_text, MAX_TOKENS)
+    text_input = build_forge_text(control_text, truncated_evidence)
+
+    boundary = uuid.uuid4().hex
+    body = _build_multipart(body_parts=[
+        ("text_input", text_input),
+        ("files", None),  # empty file field per curl example
+    ], boundary=boundary)
+
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    key = api_key or API_KEY
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    for attempt in range(2):
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        raw = _do_request(req)
+        if raw is None:
+            raise
+        logger.info(f"Forge raw response ({len(raw)} chars)")
+
+        content = _parse_forge_response(raw)
+        result = _parse_response(content)
+
+        if result["status"] != "INCONCLUSIVE" or attempt == 1:
+            result["_raw"] = content
+            result["_raw_prompt"] = text_input
+            return result
+
+        logger.info("Retrying Forge call with stricter format instruction")
+        text_input += "\n\nIMPORTANT: Return ONLY valid JSON. No explanations, no markdown."
+        body = _build_multipart(body_parts=[
+            ("text_input", text_input),
+            ("files", None),
+        ], boundary=boundary)
+
+    result["_raw"] = content
+    result["_raw_prompt"] = text_input
+    return result
+
+
+def _build_multipart(body_parts: list, boundary: str) -> bytes:
+    lines = []
+    for name, value in body_parts:
+        lines.append(f"--{boundary}".encode("utf-8"))
+        if value is None:
+            lines.append(f'Content-Disposition: form-data; name="{name}"; filename=""'.encode("utf-8"))
+            lines.append(b"Content-Type: application/octet-stream")
+            lines.append(b"")
+            lines.append(b"")
+        else:
+            lines.append(f'Content-Disposition: form-data; name="{name}"'.encode("utf-8"))
+            lines.append(b"")
+            lines.append(value.encode("utf-8"))
+    lines.append(f"--{boundary}--".encode("utf-8"))
+    return b"\r\n".join(lines)
+
+
+def _parse_forge_response(raw: str) -> str:
+    try:
+        resp_json = json.loads(raw)
+        for key in ("output", "response", "text", "generated_text"):
+            val = resp_json.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return raw
+    except json.JSONDecodeError:
+        return raw
 
 
 def _do_request(req: urllib.request.Request) -> str | None:

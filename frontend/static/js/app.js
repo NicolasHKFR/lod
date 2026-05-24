@@ -147,7 +147,8 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         const ep = document.getElementById("endpoint-select")?.value || "";
         const baseUrl = ep.replace(/\/v1\/chat\/completions$/, "/v1/models").replace(/\/api\/generate$/, "/api/tags");
-        url = "/api/models?provider=openai&url=" + encodeURIComponent(baseUrl);
+        const remoteProvider = currentConfig?.provider || "openai";
+        url = `/api/models?provider=${encodeURIComponent(remoteProvider)}&url=` + encodeURIComponent(baseUrl);
       }
       const res = await fetch(url);
       const data = await res.json();
@@ -434,7 +435,8 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("provider", "ollama");
     } else {
       formData.append("endpoint_url", endpointSelect.value);
-      formData.append("provider", currentConfig?.provider || "ollama");
+      formData.append("model_name", ollamaModel.value);
+      formData.append("provider", currentConfig?.provider || "openai");
       if (currentConfig?.api_key && currentConfig.api_key !== "***") {
         formData.append("api_key", currentConfig.api_key);
       }
@@ -1095,10 +1097,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function populateChatModels() {
     try {
-      const res = await fetch("/api/models?provider=ollama");
+      const isOllama = document.querySelector('input[name="conn-mode"]:checked')?.value === "ollama";
+      let url;
+      if (isOllama) {
+        url = "/api/models?provider=ollama";
+      } else {
+        const ep = document.getElementById("endpoint-select")?.value || "";
+        const baseUrl = ep.replace(/\/v1\/chat\/completions$/, "/v1/models").replace(/\/api\/generate$/, "/api/tags");
+        const remoteProvider = currentConfig?.provider || "openai";
+        url = `/api/models?provider=${encodeURIComponent(remoteProvider)}&url=` + encodeURIComponent(baseUrl);
+      }
+      const res = await fetch(url);
       const data = await res.json();
       if (!data.connected || !data.models.length) {
-        chatModelSelect.innerHTML = '<option value="">No models found (Ollama running?)</option>';
+        chatModelSelect.innerHTML = '<option value="">No models found</option>';
         return;
       }
       const current = chatModelSelect.value;
@@ -1106,7 +1118,7 @@ document.addEventListener("DOMContentLoaded", () => {
         data.models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
       if (current) chatModelSelect.value = current;
     } catch {
-      chatModelSelect.innerHTML = '<option value="">Could not reach Ollama</option>';
+      chatModelSelect.innerHTML = '<option value="">Could not reach endpoint</option>';
     }
   }
 
@@ -1145,9 +1157,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const msgDiv = addChatMessage(model, "Thinking...", "assistant");
     const textDiv = msgDiv.querySelector(".chat-msg-text");
 
+    const isOllama = document.querySelector('input[name="conn-mode"]:checked')?.value === "ollama";
     const params = { prompt, model };
-    if (currentConfig?.provider === "openai") {
-      params.provider = "openai";
+    if (isOllama) {
+      params.endpoint_url = "http://localhost:11434/api/generate";
+      params.provider = "ollama";
+    } else {
+      params.endpoint_url = document.getElementById("endpoint-select")?.value || "";
+      params.provider = currentConfig?.provider || "openai";
       if (currentConfig?.api_key && currentConfig.api_key !== "***") {
         params.api_key = currentConfig.api_key;
       }
@@ -1455,8 +1472,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function toggleApiKeyField() {
+    const provider = document.getElementById("cfg-provider").value;
     const field = document.getElementById("cfg-api-key-field");
-    field.style.display = document.getElementById("cfg-provider").value === "openai" ? "block" : "none";
+    field.style.display = provider === "openai" || provider === "forge" ? "block" : "none";
   }
 
   document.getElementById("cfg-provider").addEventListener("change", toggleApiKeyField);
@@ -1748,7 +1766,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function populateCompareModels() {
     try {
-      const res = await fetch("/api/models?provider=ollama");
+      const isOllama = document.querySelector('input[name="conn-mode"]:checked')?.value === "ollama";
+      let url;
+      if (isOllama) {
+        url = "/api/models?provider=ollama";
+      } else {
+        const ep = document.getElementById("endpoint-select")?.value || "";
+        const baseUrl = ep.replace(/\/v1\/chat\/completions$/, "/v1/models").replace(/\/api\/generate$/, "/api/tags");
+        const remoteProvider = currentConfig?.provider || "openai";
+        url = `/api/models?provider=${encodeURIComponent(remoteProvider)}&url=` + encodeURIComponent(baseUrl);
+      }
+      const res = await fetch(url);
       const data = await res.json();
       if (!data.connected || !data.models.length) return;
       compareModels.innerHTML = data.models.map((m, i) =>
@@ -1761,5 +1789,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ========== INIT ==========
   checkHealth();
+  loadConfigPage();
   handleRoute();
 });

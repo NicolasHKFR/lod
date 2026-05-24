@@ -63,6 +63,20 @@ def build_full_payload(control_text: str, evidence_text: str) -> dict:
     }
 
 
+def build_forge_text(control_text: str, evidence_text: str) -> str:
+    safe_control = sanitize(control_text)
+    safe_evidence = sanitize(evidence_text)
+    return f"""{SYSTEM_PROMPT}
+
+CONTROL DESCRIPTION:
+{safe_control}
+
+EVIDENCE:
+{safe_evidence}
+
+Based on the above control description and evidence, provide your assessment as a JSON object following the specified schema."""
+
+
 def build_openai_messages(control_text: str, evidence_text: str) -> list:
     user_prompt = build_prompt(control_text, evidence_text)
     return [
