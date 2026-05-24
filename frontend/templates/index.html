@@ -357,6 +357,17 @@
         </div>
         <div class="card">
           <div class="config-field">
+            <label for="cfg-provider">LLM Provider</label>
+            <select id="cfg-provider">
+              <option value="ollama">Ollama (Local)</option>
+              <option value="openai">OpenAI-Compatible (Forge, LiteLLM, etc.)</option>
+            </select>
+          </div>
+          <div class="config-field" id="cfg-api-key-field" style="display:none;">
+            <label for="cfg-api-key">API Key</label>
+            <input type="password" id="cfg-api-key" placeholder="sk-... or forge-api-key">
+          </div>
+          <div class="config-field">
             <label for="cfg-model">Model Name</label>
             <input type="text" id="cfg-model" placeholder="e.g. llama3:8b-instruct-q8_0">
           </div>

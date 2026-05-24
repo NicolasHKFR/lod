@@ -133,29 +133,39 @@ document.addEventListener("DOMContentLoaded", () => {
   loadEndpoints(endpointSelect);
 
   // Connection mode toggle
-  async function fetchOllamaModels() {
+  async function fetchOllamaModels(providerHint) {
+    const isOllama = providerHint === "ollama" || document.querySelector('input[name="conn-mode"]:checked')?.value === "ollama";
     const dot = document.getElementById("ollama-status");
-    ollamaModel.innerHTML = '<option value="">Detecting...</option>';
+    const select = ollamaModel;
+    select.innerHTML = '<option value="">Detecting...</option>';
     dot.className = "health-dot";
-    dot.title = "Checking Ollama...";
+    dot.title = "Checking...";
     try {
-      const res = await fetch("/api/ollama/tags");
+      let url;
+      if (isOllama) {
+        url = "/api/models?provider=ollama";
+      } else {
+        const ep = document.getElementById("endpoint-select")?.value || "";
+        const baseUrl = ep.replace(/\/v1\/chat\/completions$/, "/v1/models").replace(/\/api\/generate$/, "/api/tags");
+        url = "/api/models?provider=openai&url=" + encodeURIComponent(baseUrl);
+      }
+      const res = await fetch(url);
       const data = await res.json();
       if (data.connected && data.models.length) {
-        ollamaModel.innerHTML = data.models
+        select.innerHTML = data.models
           .map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`)
           .join("");
         dot.className = "health-dot ok";
-        dot.title = "Ollama running";
+        dot.title = isOllama ? "Ollama running" : "Endpoint connected";
       } else {
-        ollamaModel.innerHTML = '<option value="">No local models found (Ollama running?)</option>';
+        select.innerHTML = '<option value="">No models found</option>';
         dot.className = "health-dot error";
-        dot.title = data.connected ? "Ollama running but no models found" : "Ollama not reachable";
+        dot.title = data.error || "No models available";
       }
     } catch {
-      ollamaModel.innerHTML = '<option value="">Could not reach local Ollama</option>';
-      document.getElementById("ollama-status").className = "health-dot error";
-      document.getElementById("ollama-status").title = "Ollama not reachable";
+      select.innerHTML = '<option value="">Could not reach endpoint</option>';
+      dot.className = "health-dot error";
+      dot.title = "Not reachable";
     }
   }
 
@@ -421,8 +431,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isOllama) {
       formData.append("endpoint_url", "http://localhost:11434/api/generate");
       formData.append("model_name", ollamaModel.value);
+      formData.append("provider", "ollama");
     } else {
       formData.append("endpoint_url", endpointSelect.value);
+      formData.append("provider", currentConfig?.provider || "ollama");
+      if (currentConfig?.api_key && currentConfig.api_key !== "***") {
+        formData.append("api_key", currentConfig.api_key);
+      }
     }
 
     analyzeBtn.disabled = true;
@@ -1080,7 +1095,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function populateChatModels() {
     try {
-      const res = await fetch("/api/ollama/tags");
+      const res = await fetch("/api/models?provider=ollama");
       const data = await res.json();
       if (!data.connected || !data.models.length) {
         chatModelSelect.innerHTML = '<option value="">No models found (Ollama running?)</option>';
@@ -1131,6 +1146,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const textDiv = msgDiv.querySelector(".chat-msg-text");
 
     const params = { prompt, model };
+    if (currentConfig?.provider === "openai") {
+      params.provider = "openai";
+      if (currentConfig?.api_key && currentConfig.api_key !== "***") {
+        params.api_key = currentConfig.api_key;
+      }
+    }
     if (chatCaseContext) {
       if (chatCaseContext.readme_context) {
         params.system = `You are a help assistant for the LOD1 Validator tool. Here is the user manual:\n\n${chatCaseContext.readme_context}\n\nAnswer the user's questions based on this manual. Be concise and helpful.`;
@@ -1423,12 +1444,22 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch("/api/config");
       if (!res.ok) return;
       currentConfig = await res.json();
+      document.getElementById("cfg-provider").value = currentConfig.provider || "ollama";
+      document.getElementById("cfg-api-key").value = currentConfig.api_key && currentConfig.api_key !== "***" ? currentConfig.api_key : "";
+      toggleApiKeyField();
       document.getElementById("cfg-model").value = currentConfig.model || "";
       document.getElementById("cfg-timeout").value = currentConfig.timeout || 60;
       document.getElementById("cfg-max-tokens").value = currentConfig.max_tokens || 6000;
       renderEndpointList(currentConfig.endpoints || []);
     } catch {}
   }
+
+  function toggleApiKeyField() {
+    const field = document.getElementById("cfg-api-key-field");
+    field.style.display = document.getElementById("cfg-provider").value === "openai" ? "block" : "none";
+  }
+
+  document.getElementById("cfg-provider").addEventListener("change", toggleApiKeyField);
 
   function renderEndpointList(endpoints) {
     const list = document.getElementById("endpoint-list");
@@ -1466,6 +1497,8 @@ document.addEventListener("DOMContentLoaded", () => {
       model: document.getElementById("cfg-model").value.trim(),
       timeout: parseInt(document.getElementById("cfg-timeout").value) || 60,
       max_tokens: parseInt(document.getElementById("cfg-max-tokens").value) || 6000,
+      provider: document.getElementById("cfg-provider").value,
+      api_key: document.getElementById("cfg-api-key").value.trim(),
       endpoints: endpoints,
     };
     try {
@@ -1715,7 +1748,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function populateCompareModels() {
     try {
-      const res = await fetch("/api/ollama/tags");
+      const res = await fetch("/api/models?provider=ollama");
       const data = await res.json();
       if (!data.connected || !data.models.length) return;
       compareModels.innerHTML = data.models.map((m, i) =>

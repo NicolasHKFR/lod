@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import StreamingResponse, Response
 
-from backend.config import ROOT_DIR, UPLOAD_DIR, MAX_FILE_SIZE, load_endpoints, save_endpoints, MODEL_NAME, LLM_TIMEOUT, MAX_TOKENS, PROMPT_VERSION
+from backend.config import ROOT_DIR, UPLOAD_DIR, MAX_FILE_SIZE, load_endpoints, save_endpoints, MODEL_NAME, LLM_TIMEOUT, MAX_TOKENS, PROMPT_VERSION, LLM_PROVIDER, API_KEY
 from backend.ingestion.extractor import extract_text
 from backend.engine.ollama_client import call_llm as call_ollama, _truncate
 from backend.database import crud
@@ -45,10 +45,10 @@ def _extract_bytes(filename: str, content: bytes) -> str:
         os.unlink(tmp.name)
 
 
-def _process_control(control_text: str, evidence_parts: list, endpoint_url: str, model_name: str = None):
+def _process_control(control_text: str, evidence_parts: list, endpoint_url: str, model_name: str = None, provider: str = None, api_key: str = None):
     evidence_text = "\n\n".join(evidence_parts) if evidence_parts else "No evidence provided."
     truncated_evidence = _truncate(evidence_text, MAX_TOKENS)
-    result = call_ollama(control_text, evidence_text, endpoint_url=endpoint_url, model_name=model_name)
+    result = call_ollama(control_text, evidence_text, endpoint_url=endpoint_url, model_name=model_name, provider=provider, api_key=api_key)
     raw_response = result.pop("_raw", "")
     raw_prompt = result.pop("_raw_prompt", "")
     summary = result.get("summary", "")
@@ -91,6 +91,8 @@ async def analyze(
     evidence_files: list[UploadFile] = File(default=[]),
     endpoint_url: str = Form(""),
     model_name: str = Form(""),
+    provider: str = Form(""),
+    api_key: str = Form(""),
 ):
     control = control_text
     if control_file and control_file.filename:
@@ -129,7 +131,7 @@ async def analyze(
 
     loop = asyncio.get_event_loop()
     ctx = contextvars.copy_context()
-    result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, control, evidence_parts, selected_endpoint, selected_model))
+    result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, control, evidence_parts, selected_endpoint, selected_model, provider, api_key))
     return result
 
 
@@ -140,6 +142,8 @@ async def analyze_stream(
     evidence_files: list[UploadFile] = File(default=[]),
     endpoint_url: str = Form(""),
     model_name: str = Form(""),
+    provider: str = Form(""),
+    api_key: str = Form(""),
 ):
     evidence_data = []
     for f in evidence_files:
@@ -190,7 +194,7 @@ async def analyze_stream(
 
         try:
             ctx = contextvars.copy_context()
-            result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, control, evidence_parts, selected_endpoint, selected_model))
+            result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, control, evidence_parts, selected_endpoint, selected_model, provider, api_key))
             yield f"data: {json.dumps({'step': 'result', 'data': result})}\n\n"
         except Exception as e:
             logger.error(f"LLM call failed: {e}", exc_info=True)
@@ -206,6 +210,8 @@ async def analyze_batch(
     evidence_files: list[UploadFile] = File(default=[]),
     endpoint_url: str = Form(""),
     model_name: str = Form(""),
+    provider: str = Form(""),
+    api_key: str = Form(""),
     sse: str = Form("true"),
 ):
     evidence_parts = []
@@ -254,7 +260,7 @@ async def analyze_batch(
             yield f"data: {json.dumps({'step': 'progress', 'message': f'Processing control {idx + 1} of {total}: {preview}', 'percent': pct})}\n\n"
             try:
                 ctx = contextvars.copy_context()
-                result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, block, evidence_parts, selected_endpoint, selected_model))
+                result = await loop.run_in_executor(None, lambda: ctx.run(_process_control, block, evidence_parts, selected_endpoint, selected_model, provider, api_key))
                 result["control_preview"] = block[:100]
                 outcomes.append(result)
             except Exception as e:
@@ -339,16 +345,45 @@ async def get_readme():
 
 
 @router.get("/ollama/tags")
-async def ollama_tags():
+async def ollama_tags(url: str = Query("")):
     import urllib.request
+    target = url.strip() or "http://localhost:11434/api/tags"
+    is_openai = "/v1/models" in target
     try:
-        req = urllib.request.Request(
-            "http://localhost:11434/api/tags",
-            method="GET",
-        )
+        req = urllib.request.Request(target, method="GET")
         resp = urllib.request.urlopen(req, timeout=5)
         body = json.loads(resp.read().decode("utf-8"))
-        models = [m["name"] for m in body.get("models", [])]
+        if is_openai:
+            models = [m["id"] for m in body if "id" in m] if isinstance(body, list) else [m.get("id") for m in body.get("data", []) if m.get("id")]
+        else:
+            models = [m["name"] for m in body.get("models", [])]
+        return {"models": models, "connected": True}
+    except Exception as e:
+        return {"models": [], "connected": False, "error": str(e)}
+
+
+@router.get("/models")
+async def list_models(url: str = Query(""), provider: str = Query("")):
+    import urllib.request
+    use_provider = (provider or LLM_PROVIDER).lower()
+    if use_provider == "openai":
+        target = url.strip() or "http://localhost:11434/v1/models"
+        headers = {"Content-Type": "application/json"}
+        key = API_KEY
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+    else:
+        target = url.strip() or "http://localhost:11434/api/tags"
+        headers = {}
+    try:
+        req = urllib.request.Request(target, headers=headers, method="GET")
+        resp = urllib.request.urlopen(req, timeout=5)
+        body = json.loads(resp.read().decode("utf-8"))
+        if use_provider == "openai":
+            raw = body.get("data", body) if isinstance(body, dict) else body
+            models = [m["id"] for m in raw if isinstance(m, dict) and "id" in m]
+        else:
+            models = [m["name"] for m in body.get("models", [])]
         return {"models": models, "connected": True}
     except Exception as e:
         return {"models": [], "connected": False, "error": str(e)}
@@ -487,47 +522,36 @@ def _escape_html(text: str) -> str:
 
 
 @router.post("/chat")
-async def chat(prompt: str = Form(...), model: str = Form(""), system: str = Form(""), endpoint_url: str = Form("")):
+async def chat(
+    prompt: str = Form(...),
+    model: str = Form(""),
+    system: str = Form(""),
+    endpoint_url: str = Form(""),
+    provider: str = Form(""),
+    api_key: str = Form(""),
+):
     try:
         import urllib.request
         url = endpoint_url.strip() or load_endpoints()[0]
         selected_model = model.strip() or MODEL_NAME
-        payload = {
-            "model": selected_model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.7},
-        }
-        if system.strip():
-            payload["system"] = system.strip()
+        use_provider = (provider or LLM_PROVIDER).lower()
+        key = api_key or API_KEY
 
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        resp = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
-        body = resp.read().decode("utf-8")
-        try:
-            resp_json = json.loads(body)
-            text = resp_json.get("response", body)
-        except json.JSONDecodeError:
-            text = body
-        return {"response": text.strip(), "model": selected_model}
-    except Exception as e:
-        logger.error(f"Chat LLM call failed: {e}", exc_info=True)
-        raise HTTPException(502, f"Chat LLM call failed: {e}")
-
-
-@router.post("/chat/stream")
-async def chat_stream(prompt: str = Form(...), model: str = Form(""), system: str = Form(""), endpoint_url: str = Form("")):
-    async def event_stream():
-        try:
-            import urllib.request
-            url = endpoint_url.strip() or load_endpoints()[0]
-            selected_model = model.strip() or MODEL_NAME
+        if use_provider == "openai":
+            headers = {"Content-Type": "application/json"}
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            messages = []
+            if system.strip():
+                messages.append({"role": "system", "content": system.strip()})
+            messages.append({"role": "user", "content": prompt})
+            payload = {
+                "model": selected_model,
+                "messages": messages,
+                "stream": False,
+                "temperature": 0.7,
+            }
+        else:
             payload = {
                 "model": selected_model,
                 "prompt": prompt,
@@ -536,21 +560,92 @@ async def chat_stream(prompt: str = Form(...), model: str = Form(""), system: st
             }
             if system.strip():
                 payload["system"] = system.strip()
+            headers = {"Content-Type": "application/json"}
 
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            resp = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
-            body = resp.read().decode("utf-8")
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        resp = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
+        body = resp.read().decode("utf-8")
+
+        if use_provider == "openai":
+            try:
+                resp_json = json.loads(body)
+                text = resp_json["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, json.JSONDecodeError):
+                text = body
+        else:
             try:
                 resp_json = json.loads(body)
                 text = resp_json.get("response", body)
             except json.JSONDecodeError:
                 text = body
+
+        return {"response": text.strip(), "model": selected_model}
+    except Exception as e:
+        logger.error(f"Chat LLM call failed: {e}", exc_info=True)
+        raise HTTPException(502, f"Chat LLM call failed: {e}")
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    prompt: str = Form(...),
+    model: str = Form(""),
+    system: str = Form(""),
+    endpoint_url: str = Form(""),
+    provider: str = Form(""),
+    api_key: str = Form(""),
+):
+    async def event_stream():
+        try:
+            import urllib.request
+            url = endpoint_url.strip() or load_endpoints()[0]
+            selected_model = model.strip() or MODEL_NAME
+            use_provider = (provider or LLM_PROVIDER).lower()
+            key = api_key or API_KEY
+
+            if use_provider == "openai":
+                headers = {"Content-Type": "application/json"}
+                if key:
+                    headers["Authorization"] = f"Bearer {key}"
+                messages = []
+                if system.strip():
+                    messages.append({"role": "system", "content": system.strip()})
+                messages.append({"role": "user", "content": prompt})
+                payload = {
+                    "model": selected_model,
+                    "messages": messages,
+                    "stream": False,
+                    "temperature": 0.7,
+                }
+            else:
+                payload = {
+                    "model": selected_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.7},
+                }
+                if system.strip():
+                    payload["system"] = system.strip()
+                headers = {"Content-Type": "application/json"}
+
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            resp = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
+            body = resp.read().decode("utf-8")
+
+            if use_provider == "openai":
+                try:
+                    resp_json = json.loads(body)
+                    text = resp_json["choices"][0]["message"]["content"]
+                except (KeyError, IndexError, json.JSONDecodeError):
+                    text = body
+            else:
+                try:
+                    resp_json = json.loads(body)
+                    text = resp_json.get("response", body)
+                except json.JSONDecodeError:
+                    text = body
+
             yield f"data: {json.dumps({'response': text.strip(), 'model': selected_model})}\n\n"
         except Exception as e:
             logger.error(f"Chat stream LLM call failed: {e}")
@@ -629,6 +724,8 @@ async def get_config():
         "model": MODEL_NAME,
         "timeout": LLM_TIMEOUT,
         "max_tokens": MAX_TOKENS,
+        "provider": LLM_PROVIDER,
+        "api_key": "***" if API_KEY else "",
         "endpoints": load_endpoints(),
     }
 
@@ -650,6 +747,8 @@ async def update_config(data: dict):
         "model": MODEL_NAME,
         "timeout": LLM_TIMEOUT,
         "max_tokens": MAX_TOKENS,
+        "provider": LLM_PROVIDER,
+        "api_key": "***" if API_KEY else "",
         "endpoints": load_endpoints(),
     }
 

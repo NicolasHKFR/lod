@@ -3,6 +3,8 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
+API_KEY = os.getenv("API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama3:8b-instruct-q8_0")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "60"))

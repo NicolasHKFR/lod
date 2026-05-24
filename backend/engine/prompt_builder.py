@@ -61,3 +61,22 @@ def build_full_payload(control_text: str, evidence_text: str) -> dict:
             "top_p": 0.9,
         },
     }
+
+
+def build_openai_messages(control_text: str, evidence_text: str) -> list:
+    user_prompt = build_prompt(control_text, evidence_text)
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_openai_payload(control_text: str, evidence_text: str) -> dict:
+    return {
+        "model": None,
+        "messages": build_openai_messages(control_text, evidence_text),
+        "stream": False,
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1,
+        "top_p": 0.9,
+    }
